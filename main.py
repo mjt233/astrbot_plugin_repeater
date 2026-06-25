@@ -27,7 +27,7 @@ class RepeaterPlugin(Star):
         self.config = config
 
         threshold = config.get("repeat_threshold", 3)
-        if not isinstance(threshold, int) or threshold < 2:
+        if not isinstance(threshold, int) or threshold <= 0:
             threshold = 3
         self.repeat_threshold = threshold
 
