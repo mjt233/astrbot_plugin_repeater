@@ -1,14 +1,62 @@
-# astrbot-plugin-helloworld
+# 🗣️ 复读机插件 (astrbot_plugin_repeater)
 
-AstrBot 插件模板 / A template plugin for AstrBot plugin feature
+一个支持 **文本** 和 **图片** 复读检测的 AstrBot 群聊插件。
 
-> [!NOTE]
-> This repo is just a template of [AstrBot](https://github.com/AstrBotDevs/AstrBot) Plugin.
-> 
-> [AstrBot](https://github.com/AstrBotDevs/AstrBot) is an agentic assistant for both personal and group conversations. It can be deployed across dozens of mainstream instant messaging platforms, including QQ, Telegram, Feishu, DingTalk, Slack, LINE, Discord, Matrix, etc. In addition, it provides a reliable and extensible conversational AI infrastructure for individuals, developers, and teams. Whether you need a personal AI companion, an intelligent customer support agent, an automation assistant, or an enterprise knowledge base, AstrBot enables you to quickly build AI applications directly within your existing messaging workflows.
+## 📋 功能
 
-# Supports
+- 当群聊中**不同的群友**在一段连续的消息中发送**重复相同的内容**时，重复次数 ≥ 阈值时，机器人自动跟着复读一次
+- 支持纯文本消息和图片消息（含图片URL比较）的复读检测
+- 同一内容在冷却时间内不会重复复读，**避免死循环**
+- 复读阈值和冷却时间均可配置
 
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot Plugin Development Docs (Chinese)](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Development Docs (English)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
+## ⚙️ 配置项
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|:---:|:---:|:---:|:---|
+| `repeat_threshold` | int | `3` | 复读阈值。不同群友连续发送相同消息达到此次数时触发复读（最小为2） |
+| `cooldown_seconds` | int | `300` | 同内容复读冷却时间（秒）。相同内容被复读后，在此时间内不会再次复读 |
+
+### 配置示例
+
+```json
+{
+  "repeat_threshold": 3,
+  "cooldown_seconds": 300
+}
+```
+
+- `repeat_threshold: 3` → 3条相同消息触发复读
+- `repeat_threshold: 2` → 2条相同消息即可触发复读（更敏感）
+- `cooldown_seconds: 600` → 10分钟内同一内容只复读一次
+
+## 🧠 工作原理
+
+1. 以群为单位跟踪当前连续消息的**内容签名**、计数和最后发送者
+2. 内容签名由**文本内容 + 图片URLs**拼接而成，支持图文混合消息的检测
+3. **同一发送者**连续发送相同消息 → 不累加计数
+4. **不同发送者**连续发送相同消息 → 计数累加
+5. 消息内容变化时 → 重置计数
+6. 达到阈值后复读一次，并记录时间戳进入冷却期
+7. 冷却期内即使再次达到阈值也跳过，避免机器人自己触发自己
+
+## 📦 安装
+
+1. 在 AstrBot 后台 → 插件管理页面上传 `astrbot_plugin_repeater.zip`
+2. 或者将解压后的文件夹放入 AstrBot 的 `addons/` 目录
+3. 重启 AstrBot 或重载插件
+
+## 📄 文件结构
+
+```
+astrbot_plugin_repeater/
+├── README.md            # 本文件
+├── metadata.yaml        # 插件元信息
+├── _conf_schema.json    # 配置项定义
+├── __init__.py          # 入口
+└── main.py              # 核心逻辑
+```
+
+## 📝 版本
+
+- **v1.1.0** — 支持文本和图片复读检测，增加 README
+- **v1.0.0** — 初始版本，仅支持文本复读
