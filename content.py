@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from typing import Any, Optional
 
 import aiohttp
@@ -32,7 +33,50 @@ def _read_file_sync(path: str) -> Optional[bytes]:
         return f.read()
 
 
-async def _compute_image_md5(url: str) -> Optional[str]:
+def _detect_image_ext(data: bytes) -> str:
+    if len(data) < 12:
+        return ""
+    if data[:3] == b'GIF':
+        return ".gif"
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return ".png"
+    if data[:3] == b'\xff\xd8\xff':
+        return ".jpg"
+    if data[:4] == b'RIFF' and len(data) >= 12 and data[8:12] == b'WEBP':
+        return ".webp"
+    if data[:2] == b'BM':
+        return ".bmp"
+    return ""
+
+
+def _fix_image_path(url: str, data: bytes) -> Optional[str]:
+    detected_ext = _detect_image_ext(data)
+    if not detected_ext:
+        return None
+
+    if not _is_local_path(url):
+        return None
+
+    clean = url.replace("file://", "", 1)
+    base, ext = os.path.splitext(clean)
+    if ext.lower() == detected_ext.lower():
+        return None
+
+    new_path = base + detected_ext
+    try:
+        if os.path.exists(new_path):
+            return None
+        os.rename(clean, new_path)
+        logger.info(f"[复读机] 修正图片扩展名: {ext} -> {detected_ext}, path={new_path[:80]}")
+        if url.startswith("file://"):
+            return "file://" + new_path
+        return new_path
+    except OSError as e:
+        logger.warning(f"[复读机] 无法重命名图片文件: {e}, path={clean[:80]}")
+        return None
+
+
+async def _compute_image_md5(url: str) -> tuple[Optional[str], Optional[bytes]]:
     """
     下载图片并计算其 MD5 哈希值。
 
@@ -40,33 +84,33 @@ async def _compute_image_md5(url: str) -> Optional[str]:
         url: 图片的 URL 地址或本地文件路径
 
     Returns:
-        图片的 MD5 十六进制字符串；下载失败返回 None
+        (md5, data) 元组：md5 为十六进制字符串（失败为 None），data 为原始字节（失败为 None）
     """
     try:
         if _is_local_path(url):
             data = await _read_local_file(url)
             if data is None:
-                return None
+                return None, None
         else:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         logger.warning(f"[复读机] 下载图片失败: HTTP {resp.status}, url={url[:80]}")
-                        return None
+                        return None, None
                     data = await resp.read()
 
         if len(data) > 10 * 1024 * 1024:
             logger.warning(f"[复读机] 图片过大 ({len(data)} bytes)，跳过: url={url[:80]}")
-            return None
+            return None, None
         md5_hash = hashlib.md5(data).hexdigest()
-        return md5_hash
+        return md5_hash, data
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         logger.warning(f"[复读机] 下载图片异常: {e}, url={url[:80]}")
-        return None
+        return None, None
     except Exception as e:
         logger.warning(f"[复读机] 计算图片MD5异常: {e}, url={url[:80]}")
-        return None
+        return None, None
 
 
 async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
@@ -85,6 +129,7 @@ async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
     text = text.strip()
 
     image_urls: list[str] = []
+    image_segments: list[Image] = []
     segments: list[Any] = []
 
     message_obj = event.message_obj
@@ -95,16 +140,22 @@ async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
                 url = getattr(seg, "url", "") or getattr(seg, "file", "")
                 if url:
                     image_urls.append(url)
-                    segments.append(Image(file=url))
+                    img_seg = Image(file=url)
+                    image_segments.append(img_seg)
+                    segments.append(img_seg)
             elif seg_type == ComponentType.Plain:
                 segments.append(Plain(text=getattr(seg, "text", "")))
 
     signature_parts = [text]
-    for url in image_urls:
-        md5 = await _compute_image_md5(url)
+    for i, url in enumerate(image_urls):
+        md5, data = await _compute_image_md5(url)
         if md5:
             logger.info(f"[复读机] 图片MD5计算成功: md5={md5}, url={url[:100]}")
             signature_parts.append(f"img_md5:{md5}")
+            if data:
+                fixed_url = _fix_image_path(url, data)
+                if fixed_url:
+                    image_segments[i].file = fixed_url
         else:
             logger.info(f"[复读机] 图片MD5计算失败(回退URL): url={url[:100]}")
             signature_parts.append(f"img_url:{url}")
