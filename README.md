@@ -42,7 +42,7 @@
 ## 📦 安装
 
 1. 在 AstrBot 后台 → 插件管理页面上传 `astrbot_plugin_repeater.zip`
-2. 或者将解压后的文件夹放入 AstrBot 的 `addons/` 目录
+2. 或者将解压后的文件夹放入 AstrBot 的 `plugins/` 目录
 3. 重启 AstrBot 或重载插件
 
 ## 📄 文件结构

@@ -146,6 +146,11 @@ async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
             elif seg_type == ComponentType.Plain:
                 segments.append(Plain(text=getattr(seg, "text", "")))
 
+    # 当消息中包含图片时，移除纯 "[表情]" 文本段（QQ 表情的占位文本）
+    if image_segments:
+        segments = [s for s in segments if not (isinstance(s, Plain) and s.text.strip() == "[表情]")]
+        text = text.replace("[表情]", "").strip()
+
     signature_parts = [text]
     for i, url in enumerate(image_urls):
         md5, data = await _compute_image_md5(url)
