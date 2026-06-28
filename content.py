@@ -120,11 +120,18 @@ async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
     图片通过下载后计算 MD5 哈希进行比较，而非使用 URL。
     若图片下载失败，则回退使用 URL 作为签名（保证基本功能可用）。
 
+    修改内容（方案A）：
+    - 新增从 raw_message.attachments 获取原始图片 URL 的逻辑
+    - GIF 图片使用原始 URL（绕过 ensure_jpeg 的 JPEG 转换）
+
     Returns:
         (content_signature, message_segments)
         - content_signature: 用于比较的字符串（文本+图片MD5拼接）
         - message_segments: 消息段列表，用于复读时重建消息
     """
+    # [新增] 获取未经 PreProcessStage 处理的原始图片 URL
+    raw_image_urls = _extract_raw_image_urls(event)
+
     text = event.message_str or ""
     text = text.strip()
 
@@ -153,18 +160,75 @@ async def extract_content(event: AstrMessageEvent) -> tuple[str, list]:
 
     signature_parts = [text]
     for i, url in enumerate(image_urls):
-        md5, data = await _compute_image_md5(url)
+        # [修改] 优先使用原始 URL（未被 ensure_jpeg 污染）
+        # 原始 URL 来自 raw_message.attachments，未被 PreProcessStage 处理过
+        original_url = (
+            raw_image_urls[i]
+            if i < len(raw_image_urls) and raw_image_urls[i]
+            else None
+        )
+        compute_url = original_url if original_url else url
+
+        md5, data = await _compute_image_md5(compute_url)
         if md5:
-            logger.info(f"[复读机] 图片MD5计算成功: md5={md5}, url={url[:100]}")
+            logger.info(
+                f"[复读机] 图片MD5计算成功: md5={md5}, "
+                f"原始URL={'是' if original_url else '否'}, "
+                f"url={compute_url[:100]}"
+            )
             signature_parts.append(f"img_md5:{md5}")
             if data:
-                fixed_url = _fix_image_path(url, data)
-                if fixed_url:
-                    image_segments[i].file = fixed_url
+                # [新增] GIF 图片使用原始 URL 构建消息段
+                # 检测魔数：GIF 格式的前 3 个字节为 b'GIF'
+                if data[:3] == b'GIF' and original_url:
+                    # GIF 图片 → 使用原始 CDN URL
+                    # 这样下游发送时会从原始 CDN 下载 GIF 数据
+                    image_segments[i].file = original_url
+                    logger.info(
+                        f"[复读机] 检测到GIF动图，"
+                        f"使用原始URL复读: {original_url[:100]}"
+                    )
+                else:
+                    # 非 GIF 图片 → 保持原有逻辑
+                    fixed_url = _fix_image_path(compute_url, data)
+                    if fixed_url:
+                        image_segments[i].file = fixed_url
         else:
-            logger.info(f"[复读机] 图片MD5计算失败(回退URL): url={url[:100]}")
-            signature_parts.append(f"img_url:{url}")
+            logger.info(
+                f"[复读机] 图片MD5计算失败(回退URL): "
+                f"url={compute_url[:100]}"
+            )
+            signature_parts.append(f"img_url:{compute_url}")
 
     signature = "||".join(signature_parts)
 
     return signature, segments if segments else [Plain(text=text)]
+
+
+def _extract_raw_image_urls(event: AstrMessageEvent) -> list[str]:
+    """
+    从原始消息对象中提取未经 PreProcessStage 处理的原始图片 CDN URL。
+
+    平台适配：
+    - QQ 官方平台：raw_message.attachments[i].url 是 QQ CDN 原始 URL
+    - 其他平台暂返回空列表（不影响现有逻辑）
+
+    Returns:
+        按顺序排列的原始图片 URL 列表
+    """
+    urls: list[str] = []
+    raw_message = event.message_obj.raw_message
+
+    if raw_message is None:
+        return urls
+
+    # QQ官方机器人API：GroupMessage / C2CMessage 都有 attachments 属性
+    # attachments 是消息中的原始附件列表，未被 PreProcessStage 处理过
+    # type: ignore 因为 raw_message 类型为 object，但运行时实际有 attachments
+    if hasattr(raw_message, "attachments") and raw_message.attachments:  # type: ignore[union-attr]
+        for att in raw_message.attachments:  # type: ignore[union-attr]
+            url = getattr(att, "url", None) or ""
+            if url:
+                urls.append(url)
+
+    return urls
